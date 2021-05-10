@@ -1,0 +1,211 @@
+---
+title: "Kauzális adataelemzés beadandó"
+subtitle: "Munkanélküliségi ráta és a termékenységi ráta kapcsolata"
+author: "Granát Marcell --- AYCOPF"
+date: \today
+output: 
+  pdf_document: 
+    fig_caption: yes
+bibliography: fertilityEU.bib
+link-citations: yes
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage[hungarian]{babel}
+- \usepackage{natbib}
+- \pagestyle{fancy}
+- \fancyhf{}
+- \fancyhead[RE,LO]{\leftmark}
+- \fancyfoot[C]{\thepage}
+- \usepackage{lscape}
+- \usepackage{pdfpages}
+- \usepackage{titling}
+- \pretitle{\begin{center}\LARGE\includegraphics[width=3cm]{logo.png}\\[\bigskipamount]}
+- \posttitle{\end{center}}
+---
+
+```{r setup, include=FALSE, warning=F}
+knitr::opts_chunk$set(echo = F, comment = "", warning = F, message = F, cache = T, dev = "cairo_pdf", error = T, fig.align = 'center', eval = T)
+```
+
+```{r}
+library(tidyverse)
+library(eurostat)
+library(broom)
+library(granatlib)
+```
+
+```{r}
+df <- list(
+  tfr = get_eurostat("demo_r_find2", time_format = "num") %>% # TFR
+    filter(str_length(geo) != 2 & indic_de == "TOTFERRT") %>% 
+    filter(!str_detect(geo, "TR")) %>% # omit Turkey
+    select(geo, time, tfr = values),
+  unemployment = get_eurostat('lfst_r_lfu2ltu', time_format = 'num') %>% 
+    filter(age == "Y20-64" & sex == "F" & unit == "PC_ACT" & isced11 == "TOTAL") %>% 
+    select(geo, time, unemployment = values),
+  edu = get_eurostat('edat_lfse_04', time_format = "num") %>% 
+    filter(isced11 == 'ED5-8' & age == 'Y25-64' & unit == 'PC' & sex == 'F') %>% 
+    select(geo, time, edu = values),
+  life_expectancy = get_eurostat("demo_r_mlifexp", time_format = "num") %>% 
+    filter(age == "Y_LT1" & sex == "F") %>% 
+    select(geo, time, life_expectancy = values),
+  gni = get_eurostat("nama_10r_2gdp", time_format = "num") %>% 
+    filter(unit == "PPS_EU27_2020_HAB") %>%  # Purchasing power standard (PPS) per inhabitant
+    select(geo, time, gni = values) 
+) 
+```
+
+```{r}
+df <- plyr::join_all(df, type='left') %>% 
+  arrange(time) %>% 
+  group_by(geo) %>% 
+  group_modify(~ mutate(.x, gni = (gni / lag(gni) *100) - 100))
+```
+
+```{r}
+f_clean_names <- function(v, Tosparse = F) {
+  v <- str_replace_all(v, "gni", "Nemzeti jövedelem") %>% 
+    str_replace_all("life_expectancy", "Várható élettartam") %>% 
+    str_replace_all("edu", "Iskolázottság") %>% 
+    str_replace_all("TOTFERRT", "TTA") %>% 
+    str_replace_all("\\(Intercept\\)", "Konstans") %>% 
+    str_replace_all("unemployment", "Munkanélküliség")
+  
+  if(Tosparse) v <- str_replace_all(v, " ", "~") %>% 
+      str_replace_all('\\*', '%\\*%')
+  v
+}
+
+```
+
+```{r eval = F}
+df %>% 
+  filter(time %in% c(2007, 2008, 2009)) %>% 
+  ggplot(aes(unemployment, color = factor(time))) +
+  stat_ecdf()
+```
+
+
+
+# Elméleti megfontolás
+
+Az alábbi rövid tanulmányban a munkanélküliség teljes termékenységi rátára gyakorolt hatását kívánom elemezni az európai országok körében. Az empirikus vizsgálat elvégzéséhez fix hatás modellt és a kettős különbségek módszerét alkalmazom regionális longitudinális adatokon.
+
+A termékenységi ráta (TTA) és a makrogazdasági mutatók kapcsolatának vizsgálatára már számos tanulmány született, továbbá jól ismert a globális trend miszerint a növekedő várható élettartam és életszínvonal mellett a születendő gyermek száma megállíthatatlanul csökkenni látszik.
+
+Azonban az elmúlt évtizedek megfigyelései arra világítottak rá, hogy a fejlett országokban ez a tendencia megfordulni látszik, és a további fejlődés már a születések emelkedését okozza [@economist2009]. @myrskyla2009advances amelett foglal állást, hogy ez annak köszönhető, hogy a fejlett világban már megjelentek olyan társadalmi innovációk, amelyek elősegítik, hogy a karrierépítés és a gyermekvállalás együttesen is megvalósítható legyen a nők számára.
+
+A munkaerőpiaci intézményeknek azonban nem ez az egyetlen mechanizmusa, amelyen keresztül a születendő gyermekek számára befolyással lehet. Számos tanulmány találta, hogy a fiatalok munkavállaási és jövedelmi helyzete az egyik kulcs faktor a teljes termékenyéségi ráta alakulásában[@Adser2004; @frejka2016fertility]. Tanulmányomban azt kívánom elemezni, hogy a női munkanélküliségi rátának valóban hatása van-e a TTA-ra az európai országok körében. A szakirodalom alapján előzetesen a munkanélküliség emelkedésének negatív hatását várom a termékenységi arányszámra.
+
+A hatás korrekt megbecsléséhez azonban számos más változóra szükséges kontrollálni. Legnyilvánvalóbb, hogy a munkanélküliség emelkedése a nemzeti jövedelem csökkenésével jár együtt (Okun törvénye). Annak elemzéséhez, hogy a TTA változását valóban a munkahely elvesztése, vagy pedig az általános életszínvonal csökkenése okozza-e mindenképpen szükséges a nemzeti jövedelem szerepeltetése a modellben.
+
+A csökkenő TTA jelenségét sokszorta vezeti vissza a szakirodalom az életstílus megváltozására. A növekvő várható élettartam és a nők felsőoktatásban való növekedő részévétele miatt a gyermekvállalás időszaka kitolódik, ami járhat együtt a vállalt gyermekek számának csökkenésével[@martin1995women]. Ez a halasztás azonban nem feltétlenül végleges. Elképzelhető, hogy ezek a nők a későbbiekben pótolni fogják a későbbre tolódott gyermekvállalást, ennek megfelelően erre kontrollálni lenne szükséges [@bongaarts1998quantum]. Jelen tanulmányban regionális adatokkal (Eurostat NUTS 2) dolgozom, amelyekre a kiigazított TTA mutatók jelenleg nem érhetőek el, így ez az elemzés jelentős korlátját jelenti.
+
+Mindezeken túl számos más tényező befolyásolhatja a termékenységi rátát, mint például az egészségügy helyzete, lakhatási lehetőségek vagy a fogamzásgátlókhoz való hozzáférés lehetősége. Ezen probléma feloldására jelenthet megoldást olyan modell alkalmazása, amely legalább az időben állandó tényezők hatását képes kiszűrni. Ez az elméleti megfontolás vezet a fix-hatás panel modell alkalmazásához. Mindezek alapján az 1. ábra ismerteti a feltételezett kauzális hatások térképét.
+
+```{=tex}
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=\textwidth]{causalty_map.pdf}
+  \caption{Kauzális térkép.}
+  \label{fig1}
+\end{figure}
+```
+Egy másik lehetséges megközelítést jelent a kettős különbségek módszerének alkalmazása. A 2008-as válság során számos régióban jelentősen megemelkedett a munkanélküliségi ráta és csökkent a nemzeti jövedelem, míg a többi felsorolt prediktor feltehetően nem változott érdemben egyik évről a máskra.
+
+# Adatok
+
+Jelen tanulmányban regionális adatokon végzem el a becsléseket, amelyekhez a szükséges regionális (NUTS 2) mutatókat a Eurostat oldaláról gyűjtöttem. A termékenységi rátáról számos ország esetében egészen 1990-ig visszamenően elérhető éves adat. Ezzel szemben a munkanélküliségi ráta esetében több ország legfeljebb a 2000-es évektől szolgáltat adatokat (főként a poszt-szocialista országok idősorai hiányosak e téren). Az egy főre eső nemzeti jövedelem (2017-es árakon, vásárlóerőparitással korrigált) , a diplomával rendelkezők aránya a 25 évnél idősebb nők körében, illetve a nők születéskori várható élettartama került még be a felhasznált változók körébe.
+
+Transzformálásra egyedül a nemzeti jövedelem került, amelyet az előző évhez mért százalékos változásban kifejezve alakítottam át.
+
+## Páronkénti korrelációk
+
+A modellezés megkezdése előtt a vizsgálat fókuszába emelt változókat érdemes páronként szembeállítani a teljes termékenységi arányszámmal. Ezt mutatja be a 2. ábra.
+
+```{r fig.cap = "Páronkénti kapcsolatok vizsgálata a 2008-as adatpontokon.", fig.width=5, fig.height=4}
+df %>% 
+  filter(time == 2008) %>% 
+  pivot_longer(unemployment:gni) %>% 
+  mutate(name = f_clean_names(name)) %>% 
+  ggplot(aes(value, tfr)) + 
+  geom_point(alpha = .2) + 
+  geom_smooth(method = "lm", se = F) + 
+  facet_wrap(~ name, scales = "free_x") + 
+  labs(x = NULL, y = "TTA")
+```
+
+A páronkénti korrelációk vizsgálata arra mutat, hogy egyik a szakirodalom és elméleti megfontolás alaján előzetesen feltételezett kapcsolat irány sem volt helyes. Mindazonáltal az egyes prediktorok között is erős a korreláció (multikollinearitás), így ennek kijelentését a változók hatásának együttes vizsgálata előtt nem érdemes megtenni.
+
+# Modellezés és hipotézis vizsgálat
+
+## Fix hatás modell
+
+A fix hatás modell előnye, hogy úgy becsüli meg az egyes változókhoz tartozó paramétereket az adatokon, hogy a hatások fixek, de mindegyik egyén (jelen esetben régió) saját tengelymetszetet kap, így az időben nem változó esetleges zavaró tényezőkre képes kontrollálni.
+
+Az előzőekben leírtakat még annyiban egészítem ki jelen modellbecslésnél, hogy a gyermekvállalás természetéből adódóan (terhesség ideje) szükségesnek gondolom a munkanélküliség és a jövedelem egy évvel késleltettjét is bevenni a modellbe. A becslés eredményét az 1. táblázat ismerteti.
+
+```{r}
+df %>% 
+  arrange(time) %>% 
+  group_by(geo) %>% 
+  group_modify(~ mutate(.x, unemployment_l = lag(unemployment), 
+                        gni_l = lag(gni))) %>% 
+  lm(formula = tfr ~. -time) %>% 
+  broom::tidy() %>% 
+  filter(!str_detect(term, 'geo') & term != '(Intercept)') %>% 
+  mutate(
+    term = f_clean_names(term) %>% 
+      str_replace_all("_l", " (késleltetett)"),
+    p.value = scales::percent(p.value, accuracy = .01, decimal.mark = ',')
+    ) %>% 
+  set_names("Változó", "Becslés", "Standard hiba", "T-statisztika", "P-érték") %>% 
+  knitr::kable(caption = 'Fix hatás modell eredményei', digits = 4, format.args = list(decimal.mark = ','))
+  
+```
+
+\pagebreak
+
+A táblázatból látható, hogy valemennyi bevont változó szignifikánsnak bizonyult minden gyakorlatban bevett szignifikancia szinten, és egyedül a nemzeti jövedelem és várható élettartam hatása ellentétes az előzetesen feltételezettel. Utóbbi oka lehet, hogy annak TTA-val való ellentétes irányú együttmozgását főként a demográfiai átmenethez szokás kötni, amely egy nagyon hosszútávon megmutatkozó trend, míg jelen keretben a legtöbb régió esetében alig 10 évről rendelkezünk megfigyeléssel.
+
+A munkanélküliségi ráta hatásának modellezése szempontjából előre mutató megfontolásnak tűnik a késleltetés bevonása. A késleltetés és a jelenidejű változóhoz tartozó paraméter arra utal, hogy a nők munkanélküliségi rátájának lényegesen nagyobb a teljes hatása, mint az azonnali. Közgazdaságilag is szignifikánsnak mondható, ugyanis egy nagyobb emelkedés esetén (10 % P) már jelentősen alacsonyabb TTA szintre következtetnénk a modell alapján (-0,139 gyermek/anya).
+
+## Kettős különbségek módszere
+
+Ahogy arról korábban már említés történt a kettős különbségek módszerének előnye ebben a keretben, hogy rövidtávon a kontrollálni szükséges változók (kivétel a nemzeti jövedelem növekedési rátája) kis eséllyel változtak meg szignifikánsan, miközben 2008-ban a munkanélküliségi ráta jelentősen megugrott, így ez egy megfigyelés szempontjából kedvező időszak. Jelen keretben azonban, hogy az időszak eleji és végi összehasonlítás korrekt legyen a munkanélküliségi rátát is szükséges transzformálni a TTA mellett. Továbbra is szem előtt tartva, hogy a TTA-ra késleltetve hatnak az említett makro változók, ezért a munkanélküliségnek a 2007-ről 2008-ra történő változása (differenciája), a nemzeti jövedelemnek 2007-ről 2008-ra történő százalékos változása és TTA-nak 2007-ről 2009-re történő változása került a modell-mátrixba. A becsült hatásokat a 2. táblázat mutatja be.
+
+```{r}
+f_prep <- function(x) {
+x <- arrange(x, time) %>% 
+  filter(time >= 2007 & time <= 2009)
+if (nrow(x) == 3) {
+data.frame(geo = x$geo[1], tfr = x$tfr[3] - x$tfr[1], unemployment = x$unemployment[2]- x$unemployment[1], gni = x$gni[2])
+} 
+}
+
+df %>% 
+  arrange(time) %>% 
+  group_by(geo) %>% 
+  group_map(
+    ~ f_prep(.x), .keep = T
+    ) %>% 
+  reduce(rbind) %>% 
+  na.omit() %>% 
+  lm(formula = tfr ~ unemployment + gni) %>% 
+  tidy() %>% 
+    mutate(
+    term = f_clean_names(term) %>% 
+      str_replace_all("_l", " (késleltetett)"),
+    p.value = scales::percent(p.value, accuracy = .01, decimal.mark = ',')
+    ) %>% 
+  set_names("Változó", "Becslés", "Standard hiba", "T-statisztika", "P-érték") %>% 
+  knitr::kable(caption = 'Kettős különbségek módszerének eredményei', digits = 4, format.args = list(decimal.mark = ','))
+```
+
+A táblázatból kiolvasható, hogy a két prediktor jelen esetben is statisztikailag szignifikáns, azonban a nemzeti jövedelem hatásának előjele megváltozott, így már megfelel az előzetesen elvártaknak. Az eltérő eredmény oka lehet, hogy jelenleg csak egy limitált és különleges időszakot figyeltünk meg (recessziót), amely során eltérő mechanizmusok jelenhettek meg (jövedelem jelentős része segély formájában került újraelosztásra, így csökkentve a családok kárait). A munkanélküliség termékenységre gyakorolt hatása azonban közel megegyezik az előző modellben becsülttel, így ez az eredmény robusztusnak mondható a választott modell és időszak szempontjából.
+
+# Konlúzió
+
+Empirikus eredmények alátámasztották, hogy a női munkanélkülsiég valóban szignifikánsan negatívan hat a termékenységi arányszámra, azonban annak közgazdasági szignifikanciája csak nagyobb kiugrások esetén látszik. Eredményünk a megbecsült két modellben robusztusnak bizonyult.
+
+# Irodalomjegyzék
